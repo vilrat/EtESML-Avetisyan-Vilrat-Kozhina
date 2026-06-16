@@ -1,0 +1,87 @@
+name: ML Pipeline
+
+# Runs on every push to main and can also be started manually
+# (Actions tab -> ML Pipeline -> Run workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ----------------------------------------------------------------------
+  # 1) DATA PREPROCESSING PIPELINE
+  #    Downloads the dataset FIRST, then preprocesses it (leakage-free),
+  #    and stores the result under data/processed/ as a build artifact.
+  # ----------------------------------------------------------------------
+  preprocess:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pandas numpy scikit-learn==1.6.1 joblib
+
+      - name: Download dataset (curl, before any processing)
+        run: |
+          curl -L "https://drive.google.com/uc?export=download&id=1uCRIl4C1V-a5E11lImbW6q244BN80yKT" \
+            -o data/sample_2.csv
+
+      - name: Run preprocessing
+        run: python pipeline/preprocess.py --input data/sample_2.csv --outdir data/processed
+
+      - name: Upload preprocessed data
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-data
+          path: data/processed/
+
+  # ----------------------------------------------------------------------
+  # 2) MODEL TRAINING PIPELINE
+  #    The matrix runs all four models of the team's modeling stage in
+  #    PARALLEL jobs. Each job downloads the preprocessed data and trains
+  #    one model (RMSE / MAE / R2), then uploads the fitted model.
+  # ----------------------------------------------------------------------
+  train:
+    needs: preprocess
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - linear_regression
+          - decision_tree
+          - random_forest
+          - gradient_boosting
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pandas numpy scikit-learn==1.6.1 joblib
+
+      - name: Download preprocessed data
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-data
+          path: data/processed/
+
+      - name: Train ${{ matrix.model }}
+        run: python pipeline/train.py --model ${{ matrix.model }} --datadir data/processed --outdir models
+
+      - name: Upload trained model
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-${{ matrix.model }}
+          path: models/
